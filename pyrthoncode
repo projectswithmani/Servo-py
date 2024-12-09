@@ -1,0 +1,89 @@
+import cv2
+import mediapipe as mp
+import serial
+import time
+
+# Initialize Mediapipe Hands
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.7)
+
+mp_draw = mp.solutions.drawing_utils
+
+# Initialize Serial Communication
+arduino = serial.Serial(port='COM12', baudrate=9600, timeout=1)  # Replace 'COM12' with your Arduino port
+time.sleep(2)  # Wait for Arduino to initialize
+
+def calculate_angle(x1, y1, x2, y2):
+    """Calculate the angle based on the gap length between two fingers."""
+    return min(180, max(0, int((x2 - x1)**2 + (y2 - y1)**2)**0.5))  # Simple scaling
+
+# Start video capture
+cap = cv2.VideoCapture(0)
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+    
+    # Flip the frame for a mirrored effect
+    frame = cv2.flip(frame, 1)
+    h, w, c = frame.shape
+    
+    # Convert the frame to RGB
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(rgb_frame)
+    
+    if results.multi_hand_landmarks:
+        for hand_landmarks in results.multi_hand_landmarks:
+            # Draw landmarks
+            mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            
+            # Get coordinates for the tips of the thumb and index finger
+            thumb_tip = hand_landmarks.landmark[4]
+            index_tip = hand_landmarks.landmark[8]
+            
+            x1, y1 = int(thumb_tip.x * w), int(thumb_tip.y * h)
+            x2, y2 = int(index_tip.x * w), int(index_tip.y * h)
+            
+            # Draw circles on the tips
+            cv2.circle(frame, (x1, y1), 10, (255, 0, 0), -1)  # Thumb tip in blue
+            cv2.circle(frame, (x2, y2), 10, (0, 255, 0), -1)  # Index tip in green
+            
+            # Draw a line between the thumb and index finger tips
+            cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)  # Yellow line
+            
+            # Calculate angle based on the gap
+            angle = calculate_angle(x1, y1, x2, y2)
+            rounded_angle = round(angle)  # Round the angle value
+            
+            # Send the rounded angle to Arduino
+            arduino.write(f"{rounded_angle}\n".encode())
+            print(f"Angle: {rounded_angle}")
+            
+            # Display angle on the frame (servo degree)
+            cv2.putText(frame, f"Angle: {rounded_angle}°", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+            
+            # Create a progress bar to represent the servo angle
+            bar_width = 300  # Width of the progress bar
+            bar_height = 20  # Height of the progress bar
+            bar_x = 10  # X position of the bar
+            bar_y = 60  # Y position of the bar
+            
+            # Calculate the filled length of the bar (scaled according to angle)
+            fill_length = int((rounded_angle / 180) * bar_width)
+            
+            # Draw the empty progress bar (gray background)
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height), (200, 200, 200), -1)
+            
+            # Draw the filled progress bar (green foreground)
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_length, bar_y + bar_height), (0, 255, 0), -1)
+    
+    # Display the frame
+    cv2.imshow("Finger Control", frame)
+    
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+arduino.close()
